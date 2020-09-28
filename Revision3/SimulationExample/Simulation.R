@@ -5,681 +5,432 @@ setwd("/home/jana/Documents/PhD/Projects/inProgress/AlphaPart/Revision3/Simulati
 library(package = "AlphaSimR")
 library(package = "tidyverse")
 library(package = "AlphaPart")
+library(package = "tidyr")
 
 
-
-#args = commandArgs(trailingOnly=TRUE)
-#varE1 = args[1]
-#varE2 = args[2]
-
-homeDir = getwd()
 # ---- General parameters ----
+# Set the number of males and females selected in each population
+# This simulation includes only selection on males
+nMales_pop1   =  5
+nFemales_pop1 = 500
+nMales_pop2   =  10
+nFemales_pop2 = 1000
+nMales_pop3   =  10
+nFemales_pop3 = 2000
+# Set the number of burn-in and evaluation generations
+nGenerationBurn = 10
+nGenerationEval = 10
 
-nMales   =  10
-nFemales = 1000
+# Set the traits to record - we are simulating three correlated traits
+GenMeanCols = c("GenMeanT1","GenMeanT2", "GenMeanT3")
+GenVarCols  = c("GenVarT1", "GenVarT2", "GenVarT3")
 
-
-nGenerationBurn = 20
-nGenerationEval = 20
-
-GenMeanCols = c("GenMeanT1")
-GenVarCols  = c("GenVarT1")
-
-# ---- Base population genomes ----
-
-founderPop = runMacs(nInd = nMales + nFemales,
+# Simulate the founder population
+founderPop = runMacs(nInd = (nMales_pop1+nMales_pop2+nMales_pop3+nFemales_pop1+nFemales_pop2+nFemales_pop3),
                      nChr = 10,
                      segSites = 1000,
                      nThreads = 4,
                      species = "GENERIC")
                      #species = "CATTLE")
 
+save.image(file = "~/Documents/PhD/Projects/inProgress/AlphaPart/Revision3/SimulationExample/FounderPop_generic.R")
+load("~/Documents/PhD/Projects/inProgress/AlphaPart/Revision3/SimulationExample/FounderPop_generic.R")
 ###################################################################################
 ###################################################################################
 # ---- Simulation/Base population parameters ----
-for (rep in c(REP)) {
+SP = SimParam$new(founderPop)
+# Set the genetic variance with a high correlation between traits
+VarA = matrix(data = c(1.0, 0.9, 0.8,
+                       0.9, 1.0, 0.8,
+                       0.8, 0.8, 1.0), nrow = 3); cov2cor(VarA)
+# Set the environmental variances to achieve 0.7 and 0.9 h2 for the traits
+VarE = matrix(data = c(1.0/0.7-1, 0.0, 0.0, 
+                       0.0, 1.0/0.9-1, 0.0,
+                       0.0, 0.0, 1.0/0.8-1), nrow = 3); cov2cor(VarE)
+# Set the phenotypic variance and check the h2
+VarP = VarA + VarE; diag(VarA) / diag(VarP)
+# Add an additive trait to the population with the var-cov structure
+SP$addTraitA(nQtlPerChr = 1000, mean = c(0, 0, 0), var = diag(VarA), cor = cov2cor(VarA))
+# Set gender as systematic (half F - half M)
+SP$setGender(gender = "yes_sys")
 
-  SP = SimParam$new(founderPop)
-  # VarA = matrix(data = c(1.0, 0.1, 0.1, 1.0), nrow = 2); cov2cor(VarA)
-  VarA = matrix(data = c(1.0, 0.0, 0.0, 1.0), nrow = 2); cov2cor(VarA)
-  #varE = 1/ h2 -1
-  VarE = matrix(data = c(3.0, 0.0, 0.0, 9.0), nrow = 2); cov2cor(VarE)
+# ---- Base GN population ----
+Base = newPop(founderPop)[1:(nMales_pop1+nMales_pop2+nMales_pop3+nFemales_pop1+nFemales_pop2+nFemales_pop3)]
+Base@gender <- sample(c(rep("F", nFemales_pop1+nFemales_pop2+nFemales_pop3), rep("M", nMales_pop1+nMales_pop2+nMales_pop3)))
+# Here select the base females and males for both populations - pop1 and pop2
+BaseMales_pop1   = Base[Base@gender == "M"][1:nMales_pop1]
+BaseFemales_pop1 = Base[Base@gender == "F"][1:nFemales_pop1]
+BaseMales_pop2   = Base[Base@gender == "M"][(nMales_pop1+1):(nMales_pop1+nMales_pop2)]
+BaseFemales_pop2 = Base[Base@gender == "F"][(nFemales_pop1+1):(nFemales_pop1 + nFemales_pop2)]
+BaseMales_pop3   = Base[Base@gender == "M"][(nMales_pop1+nMales_pop2+1):(nMales_pop1 + nMales_pop2 + nMales_pop3)]
+BaseFemales_pop3 = Base[Base@gender == "F"][(nFemales_pop1+nFemales_pop2+1):(nFemales_pop1 + nFemales_pop2 + nFemales_pop3)]
+# Check the number of individuals in each population
+BaseFemales_pop1@nInd
+BaseFemales_pop2@nInd
+BaseMales_pop1@nInd
+BaseMales_pop2@nInd
+sum(BaseFemales_pop1@id %in% BaseFemales_pop2@id)
+sum(BaseMales_pop1@id %in% BaseMales_pop2@id)
+sum(BaseMales_pop2@id %in% BaseMales_pop3@id)
+rm(Base)
   
-  VarP = VarA + VarE; diag(VarA) / diag(VarP)
-  SP$addTraitA(nQtlPerChr = 1000, mean = c(0, 0), var = diag(VarA), cor = cov2cor(VarA))
-  # SP$addSnpChip(nSnpPerChr = 1000)
-  SP$setGender(gender = "yes_sys")
+###################################################################################
+###################################################################################
+
+# ---- Burn-in ----
+# In the burn-in you create two populations - pop1 and pop2
+# Select only the males - pop1 on trait 1 and pop2 on trait 2 (r=0.9)
+DataBurn = data.frame(Generation = rep(1:nGenerationBurn, each=6), 
+                      Gender = rep(c("F", "M"), nGenerationBurn*3),
+                      Population = rep(c("Pop1", "Pop1", "Pop2", "Pop2", "Pop3", "Pop3"), nGenerationBurn),
+                      GenMeanT1 = NA, GenMeanT2 = NA, GenMeanT3 = NA, 
+                      GenVarT1  = NA, GenVarT2  = NA, GenVarT3  = NA)
+PedBurnIn <- tibble()
+
+for (Generation in 1:nGenerationBurn) {
+  for (pop in c("Pop1", "Pop2", "Pop3")) {
   
-  # ---- Base GN population ----
-  
-  GN = newPop(founderPop)
-  BaseGNMales   = GN[GN@gender == "M"]
-  BaseGNFemales = GN[GN@gender == "F"]
-  rm(GN)
-  
-  ###################################################################################
-  ###################################################################################
-  
-  # ---- GN burn-in ----
-  
-  DataBurn = tibble(Generation = rep(1:nGenerationBurn, each=2), Gender = rep(c("F", "M"), nGenerationBurn),
-                    GenMeanT1 = NA, GenMeanT2 = NA, GenMeanI = NA,
-                    GenVarT1  = NA, GenVarT2  = NA, GenVarI  = NA)
-  PedEval <- tibble()
-  
-  for (Generation in 1:nGenerationBurn) {
-    # Generation = 1
+    # Set breeding individuals according to the population
+    if (pop == "Pop1") {
+      BaseFemales = BaseFemales_pop1
+      BaseMales = BaseMales_pop1
+    } else if (pop == "Pop2") {
+      BaseFemales = BaseFemales_pop2
+      BaseMales = BaseMales_pop2
+    } else if (pop == "Pop3") {
+      BaseFemales = BaseFemales_pop3
+      BaseMales = BaseMales_pop3
+    }
     
-    # Mate
-    SelCand = randCross2(females = BaseGNFemales, males = BaseGNMales,
-                         nCrosses = BaseGNFemales@nInd, nProgeny = 12)
+    # Mate the individuals
+    SelCand = randCross2(females = BaseFemales, males = BaseMales,
+                         nCrosses = BaseFemales@nInd, nProgeny = 2)
     
     # Save metrics
     for (gender in c("F", "M")) {
-      DataBurn[(DataBurn$Generation == Generation) & (DataBurn$Gender == gender), GenMeanCols] =
-        c(colMeans(SelCand@gv[SelCand@gender == gender,]),  mean(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-      DataBurn[(DataBurn$Generation == Generation) & (DataBurn$Gender == gender), GenVarCols] =
-        c(diag(var(SelCand@gv[SelCand@gender == gender,])), var(rowMeans(SelCand@gv[SelCand@gender == gender,])))
+      DataBurn[(DataBurn$Generation == Generation) & (DataBurn$Gender == gender) & (DataBurn$Pop == pop), GenMeanCols] =
+        colMeans(SelCand@gv[SelCand@gender == gender,])
+      DataBurn[(DataBurn$Generation == Generation) & (DataBurn$Gender == gender) & (DataBurn$Pop == pop), GenVarCols] =
+        diag(var(SelCand@gv[SelCand@gender == gender,]))
     }
     
     
     # Phenotype
     SelCand = setPheno(pop = SelCand, varE = VarE)
-    if (Generation == 1) {
-      VarA <- varG(SelCand)
-      VarE <- varP(SelCand) - varG(SelCand)
-    }
-    
-    PedEval = rbind(PedEval,
+    # if (Generation == 1) {
+    #   VarA <- varG(SelCand)
+    #   diag(VarE) <- diag(varP(SelCand)) - diag(varG(SelCand))
+    # }
+    # 
+    # Track the pedigree and related info
+    PedBurnIn = rbind(PedBurnIn,
                     tibble(Generation = Generation,
                            IId        = SelCand@id,
                            FId        = SelCand@father,
                            MId        = SelCand@mother,
                            Gender     = SelCand@gender,
                            Program    = "BurnIn",
+                           Population = pop,
                            PhenoT1    = SelCand@pheno[,1],
                            PhenoT2    = SelCand@pheno[,2],
-                           EbvT1      = NA,
-                           EbvT2      = NA,
+                           PhenoT3    = SelCand@pheno[,3],
                            TbvT1      = SelCand@gv[, 1],
-                           TbvT2      = SelCand@gv[, 2]))
+                           TbvT2      = SelCand@gv[, 2],
+                           TbvT3      = SelCand@gv[, 3]))
     
-    # Select
-    BaseGNMales   = selectInd(pop = SelCand, nInd = nGNMales,   gender = "M",
-                              use = "pheno", trait = function(x) rowMeans(scale(x)))
-    BaseGNFemales = selectInd(pop = SelCand, nInd = nGNFemales, gender = "F",
-                              use = "pheno", trait = function(x) rowMeans(scale(x)))
+    # Select new parents according to the population
+    if (pop == "Pop1") {
+      BaseMales_pop1   = selectInd(pop = SelCand, nInd = nMales_pop1,   gender = "M",
+                              use = "pheno", trait = 1)
+      BaseFemales_pop1 = selectInd(pop = SelCand, nInd = nFemales_pop1, gender = "F")
+    } else if (pop == "Pop2") {
+      BaseMales_pop2   = selectInd(pop = SelCand, nInd = nMales_pop2,   gender = "M",
+                                   use = "pheno", trait = 2)
+      BaseFemales_pop2 = selectInd(pop = SelCand, nInd = nFemales_pop2, gender = "F")
+    } else if (pop == "Pop3") {
+      BaseMales_pop3   = selectInd(pop = SelCand, nInd = nMales_pop3,   gender = "M",
+                                   use = "pheno", trait = 3)
+      BaseFemales_pop3 = selectInd(pop = SelCand, nInd = nFemales_pop3, gender = "F")
+    }
+
   }
-  
-  # Plot genetic means
-  DataBurn %>%
-    gather(key = "Metric", value = "Value", GenMeanCols) %>%
-    ggplot(., aes(Generation, Value, color = Metric)) +
-    geom_line() +
-    ylab(label = "Genetic mean")
-  
-  # Plot genetic variances
-  DataBurn %>% gather(key = "Metric", value= "Value", GenVarCols) %>%
-    ggplot(., aes(Generation, Value, color = Metric)) +
-    geom_line() +
-    ylab(label = "Genetic variance")
-  
-  # ---- Base PN population ----
-  
-  GNInd = c(BaseGNFemales@id, BaseGNMales@id)
-  SelCand = SelCand[!(SelCand@id %in% GNInd)]; SelCand@nInd
-  # Cheat here - consider all animals are females
-  SelCand@gender[] = "F"
-  BasePNFemales = selectInd(pop = SelCand, nInd = nPNFemales, gender = "F",
-                            use = "pheno", trait = function(x) rowMeans(scale(x)))
-  # meanG(GNMales); meanG(GNFemales); meanG(PNFemales)
-  
-  
-  # ---- PN1 ----
-  
-  PedEvalBurnIn <- PedEval
-  
-  DataEvalGN = tibble(Generation = rep(1:nGenerationEval, each=2),
-                      Program = NA, Gender = rep(c("M", "F"), nGenerationEval),
-                      GenMeanT1 = NA, GenMeanT2 = NA, GenMeanI = NA,
-                      GenVarT1  = NA, GenVarT2  = NA, GenVarI  = NA)
-  DataEvalGN$Program = "GN"
-  DataEvalPN1 = DataEvalGN
-  DataEvalPN1$Program = "PN1"
-  DataEvalPN2 = DataEvalGN
-  DataEvalPN2$Program = "PN2"
-  
-  accuraciesPN1 <- data.frame(Program = NA, Generation = NA, Trait = NA, Cor = NA)
-  accuraciesPN2 <- data.frame(Program = NA, Generation = NA, Trait = NA, Cor = NA)
-  ##############################################################################3
-  ##############################################################################3
-  hDir = getwd()
-  PedEval <- PedEvalBurnIn  
-  # ---- Program PN1  ----
-  for (Generation in (1 + nGenerationBurn):(nGenerationEval + nGenerationBurn)) {
-
-
-    if (Generation == (1 + nGenerationBurn)) {
-      GNFemales = BaseGNFemales
-      GNMales = BaseGNMales
-      PedEval$Program[PedEval$IId %in% BaseGNFemales@id] <- "GN"
-      PedEval$Program[PedEval$IId %in% BaseGNMales@id] <- "GN"
-    }
-    # Mate
-    SelCand = randCross2(females = GNFemales, males = GNMales,
-                         nCrosses = GNFemales@nInd, nProgeny = 12)
-    # meanG(SelCand)
-    
-    # Save metrics
-    for (gender in c("F", "M")) {
-      DataEvalGN[(DataEvalGN$Generation == Generation) & (DataEvalGN$Gender == gender), GenMeanCols] =
-        c(colMeans(SelCand@gv[SelCand@gender == gender,]),  mean(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-      DataEvalGN[(DataEvalGN$Generation == Generation) & (DataEvalGN$Gender == gender), GenVarCols] =
-        c(diag(var(SelCand@gv[SelCand@gender == gender,])), var(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-    }
-    
-    # Phenotype
-    SelCand = setPheno(pop = SelCand, varE = VarE)
-
-    # Track pedigree
-    PedEval = rbind(PedEval,
-                    tibble(Generation = Generation,
-                           IId        = SelCand@id,
-                           FId        = SelCand@father,
-                           MId        = SelCand@mother,
-                           Gender     = SelCand@gender,
-                           Program    = "GN",
-                           PhenoT1    = SelCand@pheno[,1],
-                           PhenoT2    = SelCand@pheno[,2],
-                           EbvT1      = NA,
-                           EbvT2      = NA,
-                           TbvT1      = SelCand@gv[, 1],
-                           TbvT2      = SelCand@gv[, 2]))
-    
-    # Estimate EBVs with blupf90
-    setwd(paste0(hDir, "/GN/"))
-    print(getwd())
-    if (Generation == (1 + nGenerationBurn)) {
-      system("rm *ped *dat")
-    }
-    # Create pedigree file
-    blupPed <- PedEval[,c("IId", "FId", "MId")]
-    blupPed$FId[is.na(blupPed$FId)] <- 0
-    blupPed$MId[is.na(blupPed$MId)] <- 0
-    blupPed <- blupPed[order(blupPed$IId),]
-    write.table(blupPed, "Blupf90.ped", quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ", na = "0")
-    
-    # Create phenotype file
-    # Trait 1
-#    blup1dat <- PedEval[,c("IId", "PhenoT1", "Program", "Generation")]
-#    blup1dat$Generation[blup1dat$Generation == 0] <- "00"
-    blup1dat <- PedEval[PedEval$Program != "BurnIn",c("IId", "PhenoT1")]
-    blup1dat$Mean <- 1
-    write.table(blup1dat, "Blupf901.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf901.dat"))
-    
-    
-    
-    # Trait 2
-    # Create phenotype file
-#    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2", "Program", "Generation")]
-#    blup2dat$Generation[blup2dat$Generation == 0] <- "00"
-    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2")]
-    blup2dat$Mean <- 1
-    write.table(blup2dat, "Blupf902.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf902.dat"))
-    
-    ## set residual values in renumf90
-    system(paste0('sed "s/ResVariance/', diag(VarE)[1], '/g" renumf901_generic.par > renumf901.par '))
-    system(paste0('sed "s/ResVariance/', diag(VarE)[2], '/g" renumf902_generic.par > renumf902.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[1], '/g" renumf901.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[2], '/g" renumf902.par '))
-    
-    # Evaluate Trait 1
-    system(command = "./renumf90 < renumParam1")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_1_", Generation))
-    
-    sol1 <- read.table(paste0("renumbered_Solutions_1_", Generation))[,2:3]
-    sol1 <- sol1[sol1$V2 %in% PedEval$IId,]
-    sol1 <- sol1[order(match(sol1$V2, PedEval$IId)),]
-    PedEval$EbvT1 <- sol1$V3
-    
-    # Evaluate Trait 2
-    system(command = "./renumf90 < renumParam2")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_2_", Generation))
-    
-    sol2 <- read.table(paste0("renumbered_Solutions_2_", Generation))[,2:3]
-    sol2 <- sol2[sol2$V2 %in% PedEval$IId,]
-    sol2 <- sol2[order(match(sol2$V2, PedEval$IId)),]
-    PedEval$EbvT2 <- sol2$V3
-    
-    
-    # Set EBVs for SelCand
-    SelCand@ebv = as.matrix(PedEval[PedEval$IId %in% SelCand@id, c("EbvT1", "EbvT2")])
-    accuraciesPN1 <- rbind(accuraciesPN1, c("GN", Generation, 1, cor(SelCand@ebv[,1], SelCand@gv[,1]) ))
-    accuraciesPN1 <- rbind(accuraciesPN1, c("GN", Generation, 2, cor(SelCand@ebv[,2], SelCand@gv[,2]) ))
-    
-    # Select
-    print(summary(PedEval$EbvT1))
-    print(summary(PedEval$EbvT2))
-    print("Selecting GN1 animals")
-    GNMales   = selectInd(pop = SelCand, nInd = nGNMales,   gender = "M",
-                          use = "ebv", trait = function(x) rowMeans(scale(x)))
-    GNFemales = selectInd(pop = SelCand, nInd = nGNFemales, gender = "F",
-                          use = "ebv", trait = function(x) rowMeans(scale(x)))
-    # Clean
-    rm(SelCand)
-    
-    
-    
-    ##############################################################################3
-    ##############################################################################3
-    # ---- Program 1: PN with 100% GNmales, PN does T1 ----
-    
-    if (Generation == (nGenerationBurn + 1)) {
-      PNFemales1 = BasePNFemales
-      PedEval$Program[PedEval$IId %in% BasePNFemales@id] <- "PN1"
-      PNFemales1ForPure = selectInd(pop = PNFemales1, nInd = PNFemales1@nInd * pPNFemalesPure,
-                                    use = "pheno", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    } else {
-      PNFemales1ForPure = selectInd(pop = PNFemales1, nInd = PNFemales1@nInd * pPNFemalesPure,
-                                    use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    }
-    
-
-    SelCand = randCross2(females = PNFemales1ForPure, males = GNMales,
-                         nCrosses = PNFemales1ForPure@nInd, nProgeny = 12)
-    # SelCand@nInd
-    # meanG(PNFemales1); meanG(PNFemales1ForPure); meanG(GNMales); meanG(SelCand)
-    
-    # Save metrics
-    for (gender in c("F", "M")) {
-      DataEvalPN1[(DataEvalPN1$Generation == Generation) & (DataEvalPN1$Gender == gender), GenMeanCols] =
-        c(colMeans(SelCand@gv[SelCand@gender == gender,]),  mean(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-      DataEvalPN1[(DataEvalPN1$Generation == Generation) & (DataEvalPN1$Gender == gender), GenVarCols] =
-        c(diag(var(SelCand@gv[SelCand@gender == gender,])), var(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-    }
-    
-    
-    # Phenotype
-    SelCand = setPheno(pop = SelCand, varE = VarE)
-    SelCand@pheno[, 2] <- NA
-    
-    
-    # Track pedigree
-    PedEval = rbind(PedEval, 
-                    tibble(Generation = Generation +1,
-                           IId        = SelCand@id,
-                           FId        = SelCand@father,
-                           MId        = SelCand@mother,
-                           Gender     = SelCand@gender,
-                           Program    = "PN1",
-                           PhenoT1    = SelCand@pheno[,1],
-                           PhenoT2    = SelCand@pheno[,2],
-                           EbvT1      = NA,
-                           EbvT2      = NA,
-                           TbvT1      = SelCand@gv[, 1],
-                           TbvT2      = SelCand@gv[, 2]))
-    
-    
-    # Estimate EBVs with blupf90
-    setwd(paste0(hDir, "/PN1/"))
-    print("Changing dir to PN1")
-    
-    if (Generation == (1 + nGenerationBurn)) {
-      system("rm *ped *dat")
-    }
-    # Create pedigree file
-    blupPed <- PedEval[,c("IId", "FId", "MId")]
-    blupPed$FId[is.na(blupPed$FId)] <- 0
-    blupPed$MId[is.na(blupPed$MId)] <- 0
-    blupPed <- blupPed[order(blupPed$IId),]
-    write.table(blupPed, "Blupf90.ped", quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ", na = "0")
-    
-
-
-    # Create phenotype file
-    # Trait 1
-#    blup1dat <- PedEval[,c("IId", "PhenoT1", "Program", "Generation")]
-#    blup1dat$Generation[blup1dat$Generation == 0] <- "00"
-    blup1dat <- PedEval[PedEval$Program != "BurnIn",c("IId", "PhenoT1")]
-    blup1dat$Mean <- 1
-    write.table(blup1dat, "Blupf901.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf901.dat"))
-
-    ## set residual values in renumf90
-    system(paste0('sed "s/ResVariance/', diag(VarE)[1], '/g" renumf901_generic.par > renumf901.par '))
-    system(paste0('sed "s/ResVariance/', diag(VarE)[2], '/g" renumf902_generic.par > renumf902.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[1], '/g" renumf901.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[2], '/g" renumf902.par '))
-    
-    # Evaluate Trait 1
-    system(command = "./renumf90 < renumParam1")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_1_", Generation))
-    
-    sol1 <- read.table(paste0("renumbered_Solutions_1_", Generation))[,2:3]
-    sol1 <- sol1[sol1$V2 %in% PedEval$IId, ]
-    sol1 <- sol1[order(match(sol1$V2, PedEval$IId)),]
-    PedEval$EbvT1 <- sol1$V3  
-    
-    # Trait 2
-    # Create phenotype file
-#    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2", "Program", "Generation")]          
-#    blup2dat$Generation[blup2dat$Generation == 0] <- "00"
-    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2")]
-    blup2dat$Mean <- 1
-    write.table(blup2dat, "Blupf902.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf902.dat"))    
-
-    # Evaluate Trait 2
-    system(command = "./renumf90 < renumParam2")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_2_", Generation))
-    
-    sol2 <- read.table(paste0("renumbered_Solutions_2_", Generation))[,2:3]
-    sol2 <- sol2[sol2$V2 %in% PedEval$IId, ]
-    sol2 <- sol2[order(match(sol2$V2, PedEval$IId)),]
-    PedEval$EbvT2 <- sol2$V3
-
-    print(nrow(PedEval))
-    print(nrow(sol1))
-    print(nrow(sol2))
-    print(summary(PedEval$EbvT1))
-    print(summary(PedEval$EbvT2))    
-    
-    # Set EBVs for SelCand
-    SelCand@ebv = as.matrix(PedEval[PedEval$IId %in% SelCand@id, c("EbvT1", "EbvT2")])
-    accuraciesPN1 <- rbind(accuraciesPN1, c("PN1", Generation, 1, cor(SelCand@ebv[,1], SelCand@gv[,1]) ))
-    accuraciesPN1 <- rbind(accuraciesPN1, c("PN1", Generation, 2, cor(SelCand@ebv[,2], SelCand@gv[,2]) ))
-    
-    # Select
-    PNMales1   = selectInd(pop = SelCand, nInd = nPNMales,   gender = "M",
-                         use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    PNFemales1 = selectInd(pop = SelCand, nInd = nPNFemales, gender = "F",
-                          use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    
-    # Clean
-    rm(SelCand)
-  }
-  
-  PedEval1 = PedEval
-  rm(PedEval)
-  DataEvalGN1 = DataEvalGN
-  rm(DataEvalGN)
-  
-  write.table(PedEval1, paste0("PedEval1_", h2, ".csv"), quote=FALSE, row.names=FALSE)
-  write.table(DataEvalGN1, paste0("DataEval1_", h2, ".csv"), quote=FALSE, row.names=FALSE)
-  write.table(accuraciesPN1, paste0("Accuracies1_", h2, ".csv"), quote=FALSE, row.names=FALSE)
-
-  ##############################################################################3
-  ##############################################################################3
-  # ---- PN2 ----
-  DataEvalGN = tibble(Generation = rep(1:nGenerationEval, each=2),
-                      Program = NA, Gender = rep(c("M", "F"), nGenerationEval),
-                      GenMeanT1 = NA, GenMeanT2 = NA, GenMeanI = NA,
-                      GenVarT1  = NA, GenVarT2  = NA, GenVarI  = NA)
-  DataEvalGN$Program = "GN"
-  
-  PedEval <- PedEvalBurnIn
-  
-  for (Generation in (1 + nGenerationBurn):(nGenerationEval + nGenerationBurn)) {
-    if (Generation == (1 + nGenerationBurn)) {
-      GNFemales = BaseGNFemales
-      GNMales = BaseGNMales
-      PedEval$Program[PedEval$IId %in% BaseGNFemales@id] <- "GN"
-      PedEval$Program[PedEval$IId %in% BaseGNMales@id] <- "GN"
-    }
-    # Mate
-    SelCand = randCross2(females = GNFemales, males = GNMales,
-                         nCrosses = GNFemales@nInd, nProgeny = 12)
-    # meanG(SelCand)
-    
-    # Save metrics
-    for (gender in c("F", "M")) {
-      DataEvalGN[(DataEvalGN$Generation == Generation) & (DataEvalGN$Gender == gender), GenMeanCols] =
-        c(colMeans(SelCand@gv[SelCand@gender == gender,]),  mean(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-      DataEvalGN[(DataEvalGN$Generation == Generation) & (DataEvalGN$Gender == gender), GenVarCols] =
-        c(diag(var(SelCand@gv[SelCand@gender == gender,])), var(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-    }
-    
-    # Phenotype
-    SelCand = setPheno(pop = SelCand, varE = VarE)
-    
-    # Track pedigree
-    PedEval = rbind(PedEval,
-                    tibble(Generation = Generation,
-                           IId        = SelCand@id,
-                           FId        = SelCand@father,
-                           MId        = SelCand@mother,
-                           Gender     = SelCand@gender,
-                           Program    = "GN",
-                           PhenoT1    = SelCand@pheno[,1],
-                           PhenoT2    = SelCand@pheno[,2],
-                           EbvT1      = NA,
-                           EbvT2      = NA,
-                           TbvT1      = SelCand@gv[, 1],
-                           TbvT2      = SelCand@gv[, 2]))
-    
-    # Estimate EBVs with blupf90
-    setwd(paste0(hDir, "/GN/"))
-    if (Generation == (1 + nGenerationBurn)) {
-      system("rm *ped *dat")
-    }
-    # Create pedigree file
-    blupPed <- PedEval[,c("IId", "FId", "MId")]
-    blupPed$FId[is.na(blupPed$FId)] <- 0
-    blupPed$MId[is.na(blupPed$MId)] <- 0
-    blupPed <- blupPed[order(blupPed$IId),]
-    write.table(blupPed, "Blupf90.ped", quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ", na = "0")
-    
-    # Create phenotype file
-    # Trait 1
-#    blup1dat <-	PedEval[,c("IId", "PhenoT1", "Program", "Generation")]
-#    blup1dat$Generation[blup1dat$Generation == 0] <- "00"
-    blup1dat <- PedEval[PedEval$Program != "BurnIn",c("IId", "PhenoT1")]
-    blup1dat$Mean <- 1
-    write.table(blup1dat, "Blupf901.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf901.dat"))
-
-
-
-    # Trait 2
-    # Create phenotype file
-#    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2", "Program", "Generation")]          
-#    blup2dat$Generation[blup2dat$Generation == 0] <- "00"
-    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2")]
-    blup2dat$Mean <- 1
-    write.table(blup2dat, "Blupf902.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf902.dat"))    
-
-    ## set residual values in renumf90
-    system(paste0('sed "s/ResVariance/', diag(VarE)[1], '/g" renumf901_generic.par > renumf901.par '))
-    system(paste0('sed "s/ResVariance/', diag(VarE)[2], '/g" renumf902_generic.par > renumf902.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[1], '/g" renumf901.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[2], '/g" renumf902.par '))
-    
-    # Evaluate Trait 1
-    system(command = "./renumf90 < renumParam1")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_1_", Generation))
-    
-    sol1 <- read.table(paste0("renumbered_Solutions_1_", Generation))[,2:3]
-    sol1 <- sol1[sol1$V2 %in% PedEval$IId, ]
-    sol1 <- sol1[order(match(sol1$V2, PedEval$IId)),]
-    PedEval$EbvT1 <- sol1$V3
-    
-    # Evaluate Trait 2
-    system(command = "./renumf90 < renumParam2")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_2_", Generation))
-    
-    sol2 <- read.table(paste0("renumbered_Solutions_2_", Generation))[,2:3]
-    sol2 <- sol2[sol2$V2 %in% PedEval$IId, ]
-    sol2 <- sol2[order(match(sol2$V2, PedEval$IId)),]
-    PedEval$EbvT2 <- sol2$V3
-    
-    
-    # Set EBVs for SelCand
-    SelCand@ebv = as.matrix(PedEval[PedEval$IId %in% SelCand@id, c("EbvT1", "EbvT2")])
-    accuraciesPN2 <- rbind(accuraciesPN2, c("GN", Generation, 1, cor(SelCand@ebv[,1], SelCand@gv[,1]) ))
-    accuraciesPN2 <- rbind(accuraciesPN2, c("GN", Generation, 2, cor(SelCand@ebv[,2], SelCand@gv[,2]) ))
-    
-    # Select
-    GNMales   = selectInd(pop = SelCand, nInd = nGNMales,   gender = "M",
-                          use = "ebv", trait = function(x) rowMeans(scale(x)))
-    GNFemales = selectInd(pop = SelCand, nInd = nGNFemales, gender = "F",
-                          use = "ebv", trait = function(x) rowMeans(scale(x)))
-    # Clean
-    rm(SelCand)
-    
-    # ---- Program 2: PN with 50% GNMales & 50% PNMales, PN does T1 ----
-    if (Generation == (1 + nGenerationBurn)) {
-      PNFemales2 = BasePNFemales
-      PNMales2 = BaseGNMales
-      PedEval$Program[PedEval$IId %in% BasePNFemales@id] <- "PN2"
-      PNFemales2ForPure = selectInd(pop = PNFemales2, nInd = PNFemales2@nInd * pPNFemalesPure,
-                                    use = "pheno", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    } else {
-      PNFemales2ForPure = selectInd(pop = PNFemales2, nInd = PNFemales2@nInd * pPNFemalesPure,
-                                  use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    }
-    SelCand = randCross2(females = PNFemales2ForPure, males = c(GNMales, PNMales2),
-                         nCrosses = PNFemales2ForPure@nInd, nProgeny = 12)
-    # SelCand@nInd
-    # meanG(PNFemales2); meanG(PNFemales2ForPure); meanG(GNMales); meanG(PNMales2); meanG(SelCand)
-    
-    # Save metrics
-    for (gender in c("F", "M")) {
-      DataEvalPN2[(DataEvalPN2$Generation == Generation) & (DataEvalPN2$Gender == gender), GenMeanCols] =
-        c(colMeans(SelCand@gv[SelCand@gender == gender,]),  mean(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-      DataEvalPN2[(DataEvalPN2$Generation == Generation) & (DataEvalPN2$Gender == gender), GenVarCols] =
-        c(diag(var(SelCand@gv[SelCand@gender == gender,])), var(rowMeans(SelCand@gv[SelCand@gender == gender,])))
-    }
-    
-    
-    # Phenotype
-    SelCand = setPheno(pop = SelCand, varE = VarE)
-    SelCand@pheno[, 2] = NA
-    
-    
-    # Track pedigree
-    PedEval = rbind(PedEval, 
-                    tibble(Generation = Generation + 1,
-                           IId        = SelCand@id,
-                           FId        = SelCand@father,
-                           MId        = SelCand@mother,
-                           Gender     = SelCand@gender,
-                           Program    = "PN2",
-                           PhenoT1    = SelCand@pheno[,1],
-                           PhenoT2    = SelCand@pheno[,2],
-                           EbvT1      = NA,
-                           EbvT2      = NA,
-                           TbvT1      = SelCand@gv[, 1],
-                           TbvT2      = SelCand@gv[, 2]))
-    
-    # Estimate EBVs with blupf90
-    setwd(paste0(hDir, "/PN2/"))
-    if (Generation == (1 + nGenerationBurn)) {
-      system("rm *ped *dat")
-    }
-    # Create pedigree file
-    blupPed <- PedEval[,c("IId", "FId", "MId")]
-    blupPed$FId[is.na(blupPed$FId)] <- 0
-    blupPed$MId[is.na(blupPed$MId)] <- 0
-    blupPed <- blupPed[order(blupPed$IId),]
-    write.table(blupPed, "Blupf90.ped", quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ", na = "0")
-    
-    # Create phenotype file
-    # Trait 1
-#    blup1dat <-	PedEval[,c("IId", "PhenoT1", "Program", "Generation")]
-#    blup1dat$Generation[blup1dat$Generation == 0] <- "00"
-    blup1dat <- PedEval[PedEval$Program != "BurnIn",c("IId", "PhenoT1")]
-    blup1dat$Mean <- 1
-    write.table(blup1dat, "Blupf901.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf901.dat"))
-
-
-
-    ## set residual values in renumf90
-    system(paste0('sed "s/ResVariance/', diag(VarE)[1], '/g" renumf901_generic.par > renumf901.par '))
-    system(paste0('sed "s/ResVariance/', diag(VarE)[2], '/g" renumf902_generic.par > renumf902.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[1], '/g" renumf901.par '))
-    system(paste0('sed -i "s/GenVariance/', diag(VarA)[2], '/g" renumf902.par '))
-    
-    # Evaluate Trait 1
-    system(command = "./renumf90 < renumParam1")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_1_", Generation))
-    
-    sol1 <- read.table(paste0("renumbered_Solutions_1_", Generation))[,2:3]
-    sol1 <- sol1[sol1$V2 %in% PedEval$IId, ]
-    sol1 <- sol1[order(match(sol1$V2, PedEval$IId)),]
-    PedEval$EbvT1 <- sol1$V3
-    
-    
-    # Trait 2
-    # Create phenotype file
-#    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2", "Program", "Generation")]          
-#    blup2dat$Generation[blup2dat$Generation == 0] <- "00"
-    blup2dat <- PedEval[PedEval$Program == "GN",c("IId", "PhenoT2")]
-    blup2dat$Mean <- 1
-    write.table(blup2dat, "Blupf902.dat",
-                quote=FALSE, row.names=FALSE, col.names=FALSE, sep=" ",
-                na = "0", append = file.exists("Blupf902.dat"))    
-    
-    # Evaluate Trait 2
-    system(command = "./renumf90 < renumParam2")
-    system(command = "./blupf90 renf90.par")
-    system(command = "bash Match_AFTERRenum.sh")
-    system(command = paste0("mv renumbered_Solutions renumbered_Solutions_2_", Generation))
-    
-    sol2 <- read.table(paste0("renumbered_Solutions_2_", Generation))[,2:3]
-    sol2 <- sol2[sol2$V2 %in% PedEval$IId, ]
-    sol2 <- sol2[order(match(sol2$V2, PedEval$IId)),]
-    PedEval$EbvT2 <- sol2$V3
-    
-    # Set EBVs for SelCand
-    SelCand@ebv = as.matrix(PedEval[PedEval$IId %in% SelCand@id, c("EbvT1", "EbvT2")])
-    accuraciesPN2 <- rbind(accuraciesPN2, c("PN2", Generation, 1, cor(SelCand@ebv[,1], SelCand@gv[,1]) ))
-    accuraciesPN2 <- rbind(accuraciesPN2, c("PN2", Generation, 2, cor(SelCand@ebv[,2], SelCand@gv[,2]) ))
-    
-    # Select
-    PNMales2   = selectInd(pop = SelCand, nInd = nPNMales,   gender = "M",
-                           use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    PNFemales2 = selectInd(pop = SelCand, nInd = nPNFemales, gender = "F",
-                           use = "ebv", trait = function(x) rowMeans(scale(x), na.rm = TRUE))
-    
-
-    # Clean
-    rm(SelCand)
-  }
- 
-  PedEval2 = PedEval
-  rm(PedEval)
-  DataEvalGN2 <- DataEvalGN
-  rm(DataEvalGN)
-  
-  accuraciesPN2$Cor <- as.numeric(accuraciesPN2$Cor)
-  write.table(PedEval2, paste0("PedEval2_", h2, ".csv"), quote=FALSE, row.names=FALSE)
-  write.table(DataEvalGN2, paste0("DataEval2_", h2, ".csv"), quote=FALSE, row.names=FALSE)
-  write.table(accuraciesPN2, paste0("Accuracies2_", h2, ".csv"), quote=FALSE, row.names=FALSE)
- }
 }
 
+table(PedBurnIn$Generation, PedBurnIn$Population)
+table(PedBurnIn$Gender, PedBurnIn$Population)
+# Plot genetic means
+DataBurn %>%
+gather(key = "Metric", value = "Value", GenMeanCols) %>%
+ggplot(., aes(Generation, Value, color = Metric)) +
+  geom_line() + facet_grid(rows = vars(Population), cols = vars(Gender)) + 
+  ylab(label = "Genetic mean")
+
+# Plot only the one correlated trait
+OneTrait <- DataBurn %>% gather(key = "Metric", value = "Value", GenMeanCols)
+rbind(OneTrait[OneTrait$Population == "Pop1" & OneTrait$Metric == "GenMeanT1",], 
+      OneTrait[OneTrait$Population == "Pop2" & OneTrait$Metric == "GenMeanT2",],
+      OneTrait[OneTrait$Population == "Pop3" & OneTrait$Metric == "GenMeanT3",]) %>% 
+ggplot(., aes(Generation, Value, color = Metric)) +
+geom_line() + facet_grid(cols = vars(Gender)) + 
+ylab(label = "Genetic mean")
+
+
+# Plot genetic variances
+DataBurn %>% gather(key = "Metric", value= "Value", GenVarCols) %>%
+ggplot(., aes(Generation, Value, color = Metric)) +
+geom_line() +  facet_grid(rows = vars(Population), cols = vars(Gender)) + 
+ylab(label = "Genetic variance")
+
+
+# ---- Import ----
+
+PedEval <- PedBurnIn
+DataEval = data.frame(Generation = rep((nGenerationBurn+1):(nGenerationBurn + nGenerationEval), each=6), 
+                      Gender = rep(c("F", "M"), nGenerationEval*3),
+                      Population = rep(c("Pop1", "Pop1", "Pop2", "Pop2", "Pop3", "Pop3"), nGenerationBurn),
+                      GenMeanT1 = NA, GenMeanT2 = NA, GenMeanT3 = NA, 
+                      GenVarT1  = NA, GenVarT2  = NA, GenVarT3  = NA)
+
+accuracies <- data.frame(Population = NA, Generation = NA, Trait = NA, Cor = NA)
+##############################################################################3
+##############################################################################3
+import = 0.2
+for (Generation in (1 + nGenerationBurn):(nGenerationEval + nGenerationBurn)) {
+  for (pop in c("Pop1", "Pop2", "Pop3")) {
+
+    # If this if the first generation of evaluation, select from burn-in animals
+    if (Generation == (1 + nGenerationBurn)) {
+      # If this is population 1, create a mixture of pop1, pop2 and pop3 fathers
+      if (pop == "Pop1") {
+        Females = BaseFemales_pop1
+        Males = c(BaseMales_pop1, BaseMales_pop2, BaseMales_pop3)
+        
+        # If pop == Pop1, mate with a mating plan - the males contains half the import % of males from Pop2 and half the import % of males from Pop3
+        # If pop == Pop2, randomly mate
+        matingPlan = cbind(rep(Females@id, 2), 
+                           c(sample(BaseMales_pop1@id, size = Females@nInd*2*(1-import), replace=T), 
+                             sample(BaseMales_pop2@id, size = Females@nInd*2*(import/2), replace=T),
+                             sample(BaseMales_pop3@id, size = Females@nInd*2*(import/2), replace=T)
+                           ))
+        SelCand = makeCross2(females = Females, males = Males, crossPlan = matingPlan, 
+                             nProgeny = 2)
+      } else if (pop == "Pop2") {
+        #If this is Pop2, just select the parents
+        Females = BaseFemales_pop2
+        Males = BaseMales_pop2
+        SelCand = randCross2(females = Females, males = Males, nCrosses = Females@nInd,
+                             nProgeny = 2)
+      } else if (pop == "Pop3") {
+        #If this is Pop2, just select the parents
+        Females = BaseFemales_pop3
+        Males = BaseMales_pop3
+        SelCand = randCross2(females = Females, males = Males, nCrosses = Females@nInd,
+                             nProgeny = 2)
+      }
+    }
+    
+    #I this is not the first generation of evaluation, select from previous round selected parens
+    if (Generation > (1 + nGenerationBurn)) {
+      #If this is pop 1, create a mixture of pop1 and pop2 fathers
+      if (pop == "Pop1") {
+        Females = Females_pop1
+        Males = c(Males_pop1, Males_pop2, Males_pop3)
+        
+        # If pop == Pop1, mate with a mating plan - the males contain the import % of males from Pop2
+        # If pop == Pop2, randomly mate
+        matingPlan = cbind(rep(Females@id, 2), 
+                           c(sample(Males_pop1@id, size = Females@nInd*2*(1-import), replace=T), 
+                             sample(c(Males_pop2@id, Males_pop3@id), size = Females@nInd*2*import, replace=T)))
+        SelCand = makeCross2(females = Females, males = Males, crossPlan = matingPlan, 
+                             nProgeny = 2)
+        
+      } else if (pop == "Pop2") {
+        Females = Females_pop2
+        Males = Males_pop2
+        SelCand = randCross2(females = Females, males = Males, nCrosses = Females@nInd,
+                             nProgeny = 2)
+      } else if (pop == "Pop3") {
+        Females = Females_pop3
+        Males = Males_pop3
+        SelCand = randCross2(females = Females, males = Males, nCrosses = Females@nInd,
+                             nProgeny = 2)
+      }
+    }
+
+    # meanG(SelCand)
+    
+    # Save metrics
+    for (gender in c("F", "M")) {
+      DataEval[(DataEval$Generation == Generation) & (DataEval$Gender == gender) & (DataEval$Pop == pop), GenMeanCols] =
+        colMeans(SelCand@gv[SelCand@gender == gender,])
+      DataEval[(DataEval$Generation == Generation) & (DataEval$Gender == gender) & (DataEval$Pop == pop), GenVarCols] =
+        diag(var(SelCand@gv[SelCand@gender == gender,]))
+    }
+    
+    # Phenotype
+    SelCand = setPheno(pop = SelCand, varE = VarE)
+
+    # Track pedigree
+    PedEval = rbind(PedEval,
+                    tibble(Generation = Generation,
+                           IId        = SelCand@id,
+                           FId        = SelCand@father,
+                           MId        = SelCand@mother,
+                           Gender     = SelCand@gender,
+                           Program    = "Eval",
+                           Population = pop,
+                           PhenoT1    = SelCand@pheno[,1],
+                           PhenoT2    = SelCand@pheno[,2],
+                           PhenoT3    = SelCand@pheno[,3],
+                           TbvT1      = SelCand@gv[, 1],
+                           TbvT2      = SelCand@gv[, 2],
+                           TbvT3      = SelCand@gv[, 3]))
+   
+    
+    # Compute Accuracies (pheno-TGV)
+    accuracies <- rbind(accuracies, c(pop, Generation, 1, cor(SelCand@pheno[,1], SelCand@gv[,1]) ))
+    accuracies <- rbind(accuracies, c(pop, Generation, 2, cor(SelCand@pheno[,2], SelCand@gv[,2]) ))
+    accuracies <- rbind(accuracies, c(pop, Generation, 3, cor(SelCand@pheno[,3], SelCand@gv[,3]) ))
+    
+    # Select
+    if (pop == "Pop1") {
+      Males_pop1   = selectInd(pop = SelCand, nInd = nMales_pop1,   gender = "M",
+                                   use = "pheno", trait = 1)
+      Females_pop1 = selectInd(pop = SelCand, nInd = nFemales_pop1, gender = "F")
+    } else if (pop == "Pop2") {
+      Males_pop2   = selectInd(pop = SelCand, nInd = nMales_pop2,   gender = "M",
+                                   use = "pheno", trait = 2)
+      Females_pop2 = selectInd(pop = SelCand, nInd = nFemales_pop2, gender = "F")
+    } else if (pop == "Pop3") {
+      Males_pop3   = selectInd(pop = SelCand, nInd = nMales_pop3,   gender = "M",
+                                   use = "pheno", trait = 3)
+      Females_pop3 = selectInd(pop = SelCand, nInd = nFemales_pop3, gender = "F")
+    }
+    # Clean
+    rm(SelCand)
+  }
+}
+
+    
+# Plot genetic means
+rbind(DataBurn, DataEval) %>%
+  gather(key = "Metric", value = "Value", GenMeanCols) %>%
+  ggplot(., aes(Generation, Value, color = Population)) +
+  geom_line() + facet_grid(rows = vars(Metric), cols = vars(Gender)) + 
+  ylab(label = "Genetic mean")
+
+
+# Plot only the one correlated trait
+OneTrait <- rbind(DataBurn, DataEval) %>% gather(key = "Metric", value = "Value", GenMeanCols)
+rbind(OneTrait[OneTrait$Population == "Pop1" & OneTrait$Metric == "GenMeanT1",], 
+      OneTrait[OneTrait$Population == "Pop2" & OneTrait$Metric == "GenMeanT2",],
+      OneTrait[OneTrait$Population == "Pop3" & OneTrait$Metric == "GenMeanT3",]) %>% 
+  ggplot(., aes(Generation, Value, color = Metric)) +
+  geom_line() + facet_grid(cols = vars(Gender)) + 
+  ylab(label = "Genetic mean")
+
+# Plot genetic variances
+DataEval %>% gather(key = "Metric", value= "Value", GenVarCols) %>%
+  ggplot(., aes(Generation, Value, color = Metric)) +
+  geom_line() + facet_grid(rows = vars(Population), cols = vars(Gender)) + 
+ylab(label = "Genetic variance")  
+
+
+#PedEval <- pedSetBase(PedEval, keep = PedEval$Generation > 9, colId = "IId", colFid = "FId", colMid = "MId")
+PedEval$Tbv <- ifelse(PedEval$Population == "Pop1", PedEval$TbvT1, ifelse(PedEval$Population == "Pop2", PedEval$TbvT2, PedEval$TbvT3))
+#PedEval$PopGender <- paste(PedEval$Pop, PedEval$Gender, sep="_")
+library(gridExtra)
+library(grid)
+png("InputDF.png", res=600, width=85, height=40, units="mm")
+p<-gridExtra::tableGrob(head(as.data.frame(PedEval[, c("Generation", "IId", "FId", "MId", "Population", "Tbv")])), 
+                        theme=ttheme_minimal(base_size = 8),
+                        rows=NULL
+                        )
+separators <- replicate(ncol(p)-1,
+                        segmentsGrob(x1 = unit(0, "npc"), gp=gpar(lty=2)),
+                        simplify=FALSE)
+## add vertical lines on the left side of columns (after 2nd)
+p <- gtable::gtable_add_grob(p, grobs = separators,
+                             t = 2, b = nrow(p), l = seq_len(ncol(p)-1)+1)
+gridExtra::grid.arrange(p)
+dev.off()
+
+
+Part = AlphaPart(x = as.data.frame(PedEval[, c("Generation", "IId", "FId", "MId", "Population", "Tbv")]),
+                  colId = "IId", colFid = "FId", colMid = "MId",
+                  colPath = "Population", colBV = "Tbv")
+#############
+#figures for paper
+png("PartDF.png", res=600, width=170, height=40, units="mm")
+p<-gridExtra::tableGrob(head(Part$Tbv), 
+                        theme=ttheme_minimal(base_size = 8),
+                        rows=NULL
+)
+separators <- replicate(ncol(p)-1,
+                        segmentsGrob(x1 = unit(0, "npc"), gp=gpar(lty=2)),
+                        simplify=FALSE)
+## add vertical lines on the left side of columns (after 2nd)
+p <- gtable::gtable_add_grob(p, grobs = separators,
+                             t = 2, b = nrow(p), l = seq_len(ncol(p)-1)+1)
+gridExtra::grid.arrange(p)
+dev.off()
+####################
+sumPart <- summary(Part, by="Generation")
+#plot(sumPart)
+
+Part1 = Part
+Part1$value <- Part$value[Part$value$Pop == "Pop1",]
+#Part1$TbvT1 <- Part$TbvT1[Part$TbvT1$Pop == "Pop1",]
+#Part1$TbvT2 <- Part$TbvT2[Part$TbvT2$Pop == "Pop1",]
+#Part1$TbvT3 <- Part$TbvT3[Part$TbvT3$Pop == "Pop1",]
+Part2 = Part
+Part2$value <- Part$value[Part$value$Pop == "Pop2",]
+# Part2$TbvT1 <- Part$TbvT1[Part$TbvT1$Pop == "Pop2",]
+# Part2$TbvT2 <- Part$TbvT2[Part$TbvT2$Pop == "Pop2",]
+# Part2$TbvT3 <- Part$TbvT3[Part$TbvT3$Pop == "Pop2",]
+Part3 = Part
+Part3$value <- Part$value[Part$value$Pop == "Pop3",]
+# Part3$TbvT1 <- Part$TbvT1[Part$TbvT1$Pop == "Pop3",]
+# Part3$TbvT2 <- Part$TbvT2[Part$TbvT2$Pop == "Pop3",]
+# Part3$TbvT3 <- Part$TbvT3[Part$TbvT3$Pop == "Pop3",]
+
+Part1Summary = summary(object = Part1, by = "Generation")
+#############
+#figures for paper
+png("ParSumtDF.png", res=600, width=85, height=40, units="mm")
+p<-gridExtra::tableGrob(head(round(Part1Summary$Tbv,5)), 
+                        theme=ttheme_minimal(base_size = 8),
+                        rows=NULL
+)
+separators <- replicate(ncol(p)-1,
+                        segmentsGrob(x1 = unit(0, "npc"), gp=gpar(lty=2)),
+                        simplify=FALSE)
+## add vertical lines on the left side of columns (after 2nd)
+p <- gtable::gtable_add_grob(p, grobs = separators,
+                             t = 2, b = nrow(p), l = seq_len(ncol(p)-1)+1)
+gridExtra::grid.arrange(p)
+dev.off()
+####################
+Part2Summary = summary(object = Part2, by = "Generation")
+Part3Summary = summary(object = Part3, by = "Generation")
+
+
+plot(summary(Part, by="Generation"))
+plot(Part1Summary)
+plot(Part2Summary)
+plot(Part3Summary)
+
+
+PartFix = pedFixBirthYear(x = as.data.frame(PedEval[, c("Generation", "IId", "FId", "MId", "Population", "Tbv")]),
+                 interval=1,
+                 colId = "IId", colFid = "FId", colMid = "MId")
+
+PedEval <- as.data.frame(PedEval[, c("Generation", "IId", "FId", "MId", "Population", "Tbv")])
+PedRebase = pedSetBase(x = as.data.frame(PedEval[, c("Generation", "IId", "FId", "MId", "Population", "Tbv")]),
+                          keep = PedEval$Generation > 10,
+                          colId = "IId", colFid = "FId", colMid = "MId")
+
+
+PedEvalSubset <- AlphaPartSubset(Part1Summary, paths = c("Pop1", "Pop2"))
+PedEvalSum <- AlphaPartSum(Part1Summary, map=list(c("Domestic", "Pop1"), c("Import", "Pop2", "Pop3")))
+plot(PedEvalSum)
